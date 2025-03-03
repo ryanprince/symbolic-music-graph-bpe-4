@@ -1,5 +1,4 @@
 import os
-
 import shutil
 
 # The path to the archive directory, relative this source file.
