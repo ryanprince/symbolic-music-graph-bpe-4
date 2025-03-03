@@ -1,6 +1,8 @@
 import os
 import subprocess
 
+from util.filesystem import move_file_to_archive
+
 maestro_download_url = 'https://storage.googleapis.com/magentadata/datasets/maestro/v3.0.0/maestro-v3.0.0-midi.zip'
 maestro_subdirectory_name = 'maestro-v3.0.0'
 maestro_zip_file_name = f"{maestro_subdirectory_name}.zip"
@@ -16,6 +18,7 @@ if os.path.exists(maestro_subdirectory_name):
   rm_command = f"rm -r %s" % (maestro_subdirectory_name)
   os.system(rm_command)
 
+# Alternate commands to use depending on whether wget or curl is available.
 curl_command = f"curl -o %s %s" % (maestro_zip_file_name, maestro_download_url)
 wget_command = f"wget -O %s %s" % (maestro_zip_file_name, maestro_download_url)
 
@@ -31,9 +34,8 @@ else:
   raise Exception("Neither wget nor curl is available. Please install one of these tools.")
 
 # Unzip the dataset.
-unzip_command = f"unzip %s" % (maestro_zip_file_name)
+unzip_command = f"unzip %s" % maestro_zip_file_name
 os.system(unzip_command)
 
-# Remove the zip file.
-rm_command = f"rm %s" % (maestro_zip_file_name)
-os.system(rm_command)
+# Archive the copy of the dataset.
+move_file_to_archive(maestro_zip_file_name)
