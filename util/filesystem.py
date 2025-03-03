@@ -27,3 +27,19 @@ def move_file_to_archive(file_path):
 
 def copy_file_to_archive(file_path):
     _archive(file_path, shutil.copyfile)
+
+tokenizers_directory = os.path.abspath('./tokenizers')
+
+def tokenizer_path(name, extension='.json'):
+    return f"{tokenizers_directory}/{name}{extension}"
+
+def remove_tokenizer(name, extension='.json'):
+    file_path = tokenizer_path(name, extension)
+    if os.path.exists(file_path):
+        os.remove(file_path)
+
+def save_tokenizer(tokenizer, name, extension='.json'):
+    os.makedirs(tokenizers_directory, exist_ok=True)
+    file_path = tokenizer_path(name, extension)
+    tokenizer.save(file_path)
+    copy_file_to_archive(file_path)

@@ -9,8 +9,7 @@ maestro_zip_file_name = f"{maestro_subdirectory_name}.zip"
 data_dir = './data'
 
 # Create data directory if it doesn't exist.
-if not os.path.exists(data_dir):
-  os.makedirs(data_dir)
+os.makedirs(data_dir, exist_ok=True)
 os.chdir(data_dir)
 
 # Clear the existing copy of the dataset, if it exists.
