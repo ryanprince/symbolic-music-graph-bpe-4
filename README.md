@@ -1,3 +1,13 @@
+## Getting Started
+
+First, install any required dependencies.
+
+Next, from the project directory, run the following.
+
+ 1. `python -m fetch-maestro-dataset` -- Fetch the Maestron dataset.
+ 2. `python -m tokenizer_training_scripts.train_REMI_basic` -- Learn the baseline tokenizer that uses REMI **without** BPE.
+ 3. `python -m tokenizer_training_scripts.train_REMI_bpe` -- Learn the baseline tokenizer that uses REMI **with** BPE.
+
 ## Directories
 
  * `trained_tokenizers` -- the output directory for the scripts in `tokenizer_training_scripts`
