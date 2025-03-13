@@ -54,7 +54,7 @@ if __name__ == "__main__":
 
     # Unzip the dataset.
     unzip_command = (
-        f"unzip -d {maestro_expanded_directory_path} %s" % maestro_zip_file_path
+        f"unzip -d {data_directory} %s" % maestro_expanded_directory_path
     )
     os.system(unzip_command)
 
