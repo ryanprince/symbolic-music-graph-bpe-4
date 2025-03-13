@@ -1,7 +1,21 @@
-## Scripts
+## Directories
 
-`python ./fetch-maestro-dataset.py` -- Downloads and extracts the Maestro MIDI dataset into the `./data` directory. Overwrites the existing copy by erasing it first. After extracting its contents, moves the `.zip` file to the `./archive` directory, in case it's useful later.
+ * `trained_tokenizers` -- the output directory for the scripts in `tokenizer_training_scripts`
 
-`python ./generate-remi-basic-tokenizer.py` -- Generates a REMI tokenizer that does not use BPE. Saves the result to a JSON file in the `./tokenizers directory` and adds a copy to the `./archive directory`.
+ * `tokenizer_training_scripts` -- learn tokenizers and output them into `trained_tokenizers`
 
-`python ./generate-remi-bpe-tokenizer.py` -- Generates a BPE tokenizer that's based on REMI tokens. Saves the result to a JSON file in the `./tokenizers directory` and adds a copy to the `./archive directory`.
+ * `data` -- where the Maestro dataset gets downloaded
+
+ * `util`
+
+ * `archive` -- some timestamped versions of files will copy to here
+
+## Tokenizer Learning Scripts
+
+ * `python -m tokenizer_training_scripts.train_REMI_basic` -- Generates a REMI tokenizer that does not use BPE. Saves the result to a JSON file in the `./trained_tokenizers directory` and adds a copy to the `./archive directory`.
+
+ * `python -m tokenizer_training_scripts.train_REMI_bpe` -- Generates a BPE tokenizer that's based on REMI tokens. Saves the result to a JSON file in the `./trained_tokenizers directory` and adds a copy to the `./archive directory`.
+
+## Data Scripts
+
+ * `python -m fetch-maestro-dataset` -- Downloads and extracts the Maestro MIDI dataset into a subdirectory within the `./data` directory. Overwrites the existing copy by erasing it first. After extracting its contents, moves the `.zip` file to the `./archive` directory, in case it's useful later.
