@@ -2,6 +2,20 @@
 
 First, install any required dependencies.
 
+Second, within the project root directory, clone MidiTok.
+
+```
+% git clone https://github.com/Natooz/MidiTok.git
+```
+
+For features developed specifically for the course project, you will instead need the branch developed for this project, located in the student's own copy of the repo.
+
+```
+% https://github.com/ryanprince/MidiTok.git
+% cd MidiTok
+% git checkout homework
+```
+
 Next, from the project directory, run the following.
 
  1. `python -m fetch-maestro-dataset` -- Fetch the Maestron dataset.

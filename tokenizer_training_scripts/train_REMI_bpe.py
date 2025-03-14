@@ -1,4 +1,4 @@
-from miditok import REMI
+from MidiTok.src.miditok import REMI
 from tokenizer_training_scripts.util.BaseTokenizerLearner import (
     BaseTokenizerLearner,
 )
