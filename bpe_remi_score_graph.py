@@ -246,30 +246,18 @@ class REMIGraphBPE:
         return results
 
     def serialize_graph(self, G):
-        def is_bar(remi_token):
-            return "Bar_" in remi_token
+        # Helper methods to interpret REMI tokens.
+        is_bar = lambda remi_token: "Bar_" in remi_token
+        is_position = lambda remi_token: "Position_" in remi_token
+        parse_position = lambda remi_token: remi_token.split("_")[1]
+        is_pitch = lambda remi_token: "Pitch_" in remi_token
+        parse_pitch = lambda remi_token: remi_token.split("_")[1]
+        is_duration = lambda remi_token: "Duration_" in remi_token
+        is_start = lambda remi_token: start_token_type == remi_token
+        is_end = lambda remi_token: end_token_type == remi_token
 
-        def is_position(remi_token):
-            return "Position_" in remi_token
-
-        def parse_position(remi_token):
-            return remi_token.split("_")[1]
-
-        def is_pitch(remi_token):
-            return "Pitch_" in remi_token
-
-        def parse_pitch(remi_token):
-            return remi_token.split("_")[1]
-
-        def is_duration(remi_token):
-            return "Duration_" in remi_token
-
-        def is_start(remi_token):
-            return start_token_type == remi_token
-
-        def is_end(remi_token):
-            return end_token_type == remi_token
-
+        # If the tokenization has split after a position but before its pitch, we will want to scan ahead
+        # to find its pitch to ensure canonical sort order in the 1D serialization.
         def lookahead_for_pitch(same_node_subsequent_remi_tokens, next_node_index=None):
             for token in same_node_subsequent_remi_tokens:
                 if is_pitch(token):
@@ -280,6 +268,7 @@ class REMIGraphBPE:
             successors = [succ for succ in G.successors(next_node_index)]
             return lookahead_for_pitch(next_node_remi_tokens, successors[0] if len(successors) == 1 else None)
 
+        # Recursively annotate each node with its depth, to provide a sort order for canonical 1D serialization.
         def annotate_nodes_with_depths(G, start_node_index=-1, bar=0, position='0', pitch='0'):
             remi_tokens = parse_remi_tokens_from_token_type(G.nodes[start_node_index]["token_type"])
 
@@ -291,14 +280,15 @@ class REMIGraphBPE:
                 if is_bar(token):
                     bar += 1
                     position = '0'
-                    pitch = '0'
+                    pitch = 'A0'
                 elif is_position(token):
                     position = parse_position(token)
                     pitch = lookahead_for_pitch(remi_tokens[i + 1 :], successors[0] if len(successors) == 1 else None)
                 elif is_pitch(token):
                     pitch = parse_pitch(token)
 
-                # First iteration is based on the first REMI token and sets the depth for the potentially-composite token.
+                # The first iteration is based on the first REMI token. A merged token should be
+                # sorted based on the depth of its first constituent REMI token.
                 if current_token_depth is None:
                     current_token_depth = (bar, position, pitch)
 
