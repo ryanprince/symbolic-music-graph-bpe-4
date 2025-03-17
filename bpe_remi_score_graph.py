@@ -249,9 +249,9 @@ class REMIGraphBPE:
         # Helper methods to interpret REMI tokens.
         is_bar = lambda remi_token: "Bar_" in remi_token
         is_position = lambda remi_token: "Position_" in remi_token
-        parse_position = lambda remi_token: remi_token.split("_")[1]
+        parse_position = lambda remi_token: int(remi_token.split("_")[1])
         is_pitch = lambda remi_token: "Pitch_" in remi_token
-        parse_pitch = lambda remi_token: remi_token.split("_")[1]
+        parse_pitch = lambda remi_token: int(remi_token.split("_")[1])
         is_duration = lambda remi_token: "Duration_" in remi_token
         is_start = lambda remi_token: start_token_type == remi_token
         is_end = lambda remi_token: end_token_type == remi_token
@@ -263,13 +263,13 @@ class REMIGraphBPE:
                 if is_pitch(token):
                     return parse_pitch(token)
             if next_node_index is None:
-                return '0'
+                return 0
             next_node_remi_tokens = parse_remi_tokens_from_token_type(G.nodes[next_node_index]["token_type"])
             successors = [succ for succ in G.successors(next_node_index)]
             return lookahead_for_pitch(next_node_remi_tokens, successors[0] if len(successors) == 1 else None)
 
         # Recursively annotate each node with its depth, to provide a sort order for canonical 1D serialization.
-        def annotate_nodes_with_depths(G, start_node_index=-1, bar=0, position='0', pitch='0'):
+        def annotate_nodes_with_depths(G, start_node_index=-1, bar=0, position=0, pitch=0):
             remi_tokens = parse_remi_tokens_from_token_type(G.nodes[start_node_index]["token_type"])
 
             current_token_depth = None
@@ -279,8 +279,8 @@ class REMIGraphBPE:
             for i, token in enumerate(remi_tokens):
                 if is_bar(token):
                     bar += 1
-                    position = '0'
-                    pitch = 'A0'
+                    position = 0
+                    pitch = 0
                 elif is_position(token):
                     position = parse_position(token)
                     pitch = lookahead_for_pitch(remi_tokens[i + 1 :], successors[0] if len(successors) == 1 else None)
@@ -318,6 +318,7 @@ class REMIGraphBPE:
 
         simultaneous_start = "["
         simultaneous_end = "]"
+        position_change = "STEP"
         continuation_for_not_well_ended = "->"
         separator_for_well_ended_simultaneous = ","
 
