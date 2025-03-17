@@ -58,6 +58,24 @@ class REMIGraphBPE:
         # Index of pairs that cannot be merged due to connectivity issues in previous merge attempts.
         self.per_graph_blocked_pairs = [set() for _ in range(len(graph_corpus))]
 
+        # Special tokens for 1D serialization.
+        self.continue_sequence_token = 7777
+        self.continue_sequence_token_type = "->"
+        self.simultaneous_start_token = 8888
+        
+        # Say we have a path of a complete measure followed by another such path.
+        # To collate them if they actually begin at the same time step, we wrap them
+        # in a simultaneous section.
+        self.simultaneous_start_token_type = "["
+        self.simultaneous_end_token = 9999
+        self.simultaneous_end_token_type = "]"
+
+        # At the limit, the Janus token approaches halving the number of tokens for simultaneous sections.
+        # We just use one Janus token where we would have both an end and a beginning token consecutively.
+        self.simultaneous_end_begin_janus_token = 10000
+        self.simultaneous_end_begin_janus_token_type = "]["
+        
+
     def log_status_update(self, label, type_a, type_b):
         print(label)
         print(f"Learned vocab size is {len(self.vocabulary)} of target {self.target_learned_vocab_size}")
@@ -298,11 +316,6 @@ class REMIGraphBPE:
             for succ in successors:
                 annotate_nodes_with_depths(G, succ, bar, position, pitch)
 
-        # # Special tokens for the serialization.
-        # simultaneous_start = "["
-        # simultaneous_end = "]"
-        # position_change = "STEP"
-        continue_sequence = "->"
         def serialize_graph_nodes(G, drop_start_end=True):
             
             # Zip and sort the nodes with their depths.
@@ -310,7 +323,8 @@ class REMIGraphBPE:
             depth_node_tuples = zip([data["depth"] for _, data in G.nodes(data=True)], G.nodes)
             sorted_depth_node_tuples = sorted(depth_node_tuples)
 
-            result = []
+            result_token_ids = []
+            result_token_types = []
             seen_nodes = set()
             within_simultaneous = False
             previous_depth = sorted_depth_node_tuples[0][0] if len(sorted_depth_node_tuples) > 0 else None
@@ -323,7 +337,8 @@ class REMIGraphBPE:
 
                 # Detect whether the current node is at a different depth than the previous one.
                 if current_depth != previous_depth and within_simultaneous:
-                    # serialized.append(simultaneous_end)
+                    result_token_ids.append(self.simultaneous_end_token)
+                    result_token_types.append(self.simultaneous_end_token_type)
                     within_simultaneous = False
                 previous_depth = current_depth
 
@@ -332,10 +347,16 @@ class REMIGraphBPE:
                 next_depth = sorted_depth_node_tuples[i + 1][0] if i + 1 < len(sorted_depth_node_tuples) else None
                 next_node_has_same_depth = next_depth == current_depth
                 if next_node_has_same_depth and not within_simultaneous:
-                    # result.append(simultaneous_start)
+                    if len(result_token_ids) > 0 and result_token_ids[-1] == self.simultaneous_end_token:
+                        result_token_ids[-1] = self.simultaneous_end_begin_janus_token
+                        result_token_types[-1] = self.simultaneous_end_begin_janus_token_type
+                    else:
+                        result_token_ids.append(self.simultaneous_start_token)
+                        result_token_types.append(self.simultaneous_start_token_type)
                     within_simultaneous = True
 
-                result.append(G.nodes[node]["token_type"])
+                result_token_ids.append(node)
+                result_token_types.append(G.nodes[node]["token_type"])
 
                 # If the node has a monoid of successors of the same depth, consume that path so that
                 # these related nodes are captured together. E.g., position -> pitch -> velocity -> duration
@@ -351,32 +372,39 @@ class REMIGraphBPE:
                     if G.nodes[succ]["depth"] != current_depth:
                         break
                     seen_nodes.add(succ)
-                    result.append(continue_sequence)
-                    result.append(G.nodes[succ]["token_type"])
+                    result_token_ids.append(self.continue_sequence_token)
+                    result_token_ids.append(succ)
+                    result_token_types.append(self.continue_sequence_token_type)
+                    result_token_types.append(G.nodes[succ]["token_type"])
                     iterate_from_node = succ
 
-            # if within_simultaneous:
-            #     result.append(simultaneous_end)
+            if within_simultaneous:
+                result_token_ids.append(self.simultaneous_end_token)
+                result_token_types.append(self.simultaneous_end_token_type)
+
 
             # The START and END tokens are just to assist in manipulating the graph.
             # They are not essential to the 1d token sequence, so we can drop them.
             if drop_start_end:
-                return result[1:-1]
+                return result_token_ids[1:-1], result_token_types[1:-1]
             
-            return result
+            return result_token_ids, result_token_types
         
-        is_remi = lambda token: not (is_start(token) or is_end(token)) and continue_sequence != token
-        def node_sequence_to_remi_tokens(node_tokens_1d_sequence):
+        special_non_remi_token_types = set([start_token_type, end_token_type, self.continue_sequence_token_type, self.simultaneous_start_token_type, self.simultaneous_end_token_type, self.simultaneous_end_begin_janus_token_type])
+        # is_remi = lambda token: token not in special_non_remi_token_types
+        def node_sequence_to_remi_tokens(node_tokens_types_1d_sequence):
+            non_special_tokens = [token for token in node_tokens_types_1d_sequence if token not in special_non_remi_token_types]
             return [
                 token
-                for remi_tokens in [parse_remi_tokens_from_token_type(token) for token in node_tokens_1d_sequence if is_remi(token)]
+                for remi_tokens in [parse_remi_tokens_from_token_type(token) for token in non_special_tokens]
                 for token in remi_tokens
             ]
 
-        node_tokens_sequence = serialize_graph_nodes(G)
-        print("node_tokens_sequence", node_tokens_sequence)
-        extracted_remi = node_sequence_to_remi_tokens(node_tokens_sequence)
-        print("extracted_remi", extracted_remi)
+        node_tokens_ids_sequence, node_tokens_types_sequence = serialize_graph_nodes(G)
+        print("node_tokens_ids_sequence", node_tokens_ids_sequence)
+        print("node_tokens_types_sequence", node_tokens_types_sequence)
+        extracted_remi = node_sequence_to_remi_tokens(node_tokens_types_sequence)
+        print("\nextracted_remi", extracted_remi)
 
     # Expand compressed score graph. Note that the REMIGraphBPE compression loses edges that are
     # not essential for recovering the underlying score.
@@ -455,7 +483,6 @@ dag_corpus = create_dag_corpus()
 remi_graph_bpe = REMIGraphBPE(target_learned_vocab_size=20, graph_corpus=dag_corpus)
 
 compressed_graphs = remi_graph_bpe.learn_and_apply_vocabulary()
-
 
 # Print the learned vocabulary.
 print("\nLearned REMIGraphBPE Vocabulary:")
