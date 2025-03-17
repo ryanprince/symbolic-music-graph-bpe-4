@@ -245,7 +245,7 @@ class REMIGraphBPE:
             results = self.merge_directed_type_pair_edges(results, per_graph_blocked_pairs, type_a, type_b, merged_type)
         return results
 
-    def serialize_graph(self, G):
+    def serialize_to_1d_token_sequence(self, G):
         # Helper methods to interpret REMI tokens.
         is_bar = lambda remi_token: "Bar_" in remi_token
         is_position = lambda remi_token: "Position_" in remi_token
@@ -269,11 +269,10 @@ class REMIGraphBPE:
             return lookahead_for_pitch(next_node_remi_tokens, successors[0] if len(successors) == 1 else None)
 
         # Recursively annotate each node with its depth, to provide a sort order for canonical 1D serialization.
+        # The tokens are read akin to a sort of modified uniform cost search based on this sort order.
         def annotate_nodes_with_depths(G, start_node_index=-1, bar=0, position=0, pitch=0):
             remi_tokens = parse_remi_tokens_from_token_type(G.nodes[start_node_index]["token_type"])
-
             current_token_depth = None
-
             successors = [succ for succ in G.successors(start_node_index)]
 
             for i, token in enumerate(remi_tokens):
@@ -299,74 +298,85 @@ class REMIGraphBPE:
             for succ in successors:
                 annotate_nodes_with_depths(G, succ, bar, position, pitch)
 
-        annotate_nodes_with_depths(G)
+        # # Special tokens for the serialization.
+        # simultaneous_start = "["
+        # simultaneous_end = "]"
+        # position_change = "STEP"
+        continue_sequence = "->"
+        def serialize_graph_nodes(G, drop_start_end=True):
+            
+            # Zip and sort the nodes with their depths.
+            annotate_nodes_with_depths(G)
+            depth_node_tuples = zip([data["depth"] for _, data in G.nodes(data=True)], G.nodes)
+            sorted_depth_node_tuples = sorted(depth_node_tuples)
 
-        # Zip the nodes with their depths.
-        depth_node_tuples = zip(
-            [data["depth"] for _, data in G.nodes(data=True)], G.nodes
-        )
+            result = []
+            seen_nodes = set()
+            within_simultaneous = False
+            previous_depth = sorted_depth_node_tuples[0][0] if len(sorted_depth_node_tuples) > 0 else None
 
-        # Sort the nodes by their depths.
-        sorted_depth_node_tuples = sorted(depth_node_tuples)
-        for tuple in sorted_depth_node_tuples:
-            print(tuple)
+            for i, (current_depth, node) in enumerate(sorted_depth_node_tuples):
+                # Don't process nodes twice. There is some logic that sometimes skips ahead, and in those cases the nodes are marked as seen.
+                if node in seen_nodes:
+                    continue
+                seen_nodes.add(node)
+
+                # Detect whether the current node is at a different depth than the previous one.
+                if current_depth != previous_depth and within_simultaneous:
+                    # serialized.append(simultaneous_end)
+                    within_simultaneous = False
+                previous_depth = current_depth
 
 
-        serialized = []
+                # Detect whether we are entering a section of simultaneous nodes.
+                next_depth = sorted_depth_node_tuples[i + 1][0] if i + 1 < len(sorted_depth_node_tuples) else None
+                next_node_has_same_depth = next_depth == current_depth
+                if next_node_has_same_depth and not within_simultaneous:
+                    # result.append(simultaneous_start)
+                    within_simultaneous = True
 
-        seen_nodes = set()
+                result.append(G.nodes[node]["token_type"])
 
-        simultaneous_start = "["
-        simultaneous_end = "]"
-        position_change = "STEP"
-        continuation_for_not_well_ended = "->"
-        separator_for_well_ended_simultaneous = ","
+                # If the node has a monoid of successors of the same depth, consume that path so that
+                # these related nodes are captured together. E.g., position -> pitch -> velocity -> duration
+                # are the same depth and shouldn't have edges interfering between their monoid and the broader graph.
+                iterate_from_node = node
+                while True:
+                    successors = [succ for succ in G.successors(iterate_from_node)]
+                    if len(successors) != 1:
+                        break
+                    succ = successors[0]
+                    if succ in seen_nodes:
+                        break
+                    if G.nodes[succ]["depth"] != current_depth:
+                        break
+                    seen_nodes.add(succ)
+                    result.append(continue_sequence)
+                    result.append(G.nodes[succ]["token_type"])
+                    iterate_from_node = succ
 
-        within_simultaneous = False
+            # if within_simultaneous:
+            #     result.append(simultaneous_end)
 
-        previous_depth = sorted_depth_node_tuples[0][0] if len(sorted_depth_node_tuples) > 0 else None
+            # The START and END tokens are just to assist in manipulating the graph.
+            # They are not essential to the 1d token sequence, so we can drop them.
+            if drop_start_end:
+                return result[1:-1]
+            
+            return result
+        
+        is_remi = lambda token: not (is_start(token) or is_end(token)) and continue_sequence != token
+        def node_sequence_to_remi_tokens(node_tokens_1d_sequence):
+            return [
+                token
+                for remi_tokens in [parse_remi_tokens_from_token_type(token) for token in node_tokens_1d_sequence if is_remi(token)]
+                for token in remi_tokens
+            ]
 
-        for i, (current_depth, node) in enumerate(sorted_depth_node_tuples):
-            # print("serialized", serialized)
-            if node in seen_nodes:
-                continue
-
-            if current_depth != previous_depth and within_simultaneous:
-                serialized.append(simultaneous_end)
-                within_simultaneous = False
-            previous_depth = current_depth
-
-            seen_nodes.add(node)
-
-            next_depth = sorted_depth_node_tuples[i + 1][0] if i + 1 < len(sorted_depth_node_tuples) else None
-            next_node_has_same_depth = next_depth == current_depth
-
-            if next_node_has_same_depth and not within_simultaneous:
-                serialized.append(simultaneous_start)
-                within_simultaneous = True
-            serialized.append(G.nodes[node]["token_type"])
-
-            iterate_monoidal_successors_of_same_depth = True
-            iterate_from_node = node
-            while iterate_monoidal_successors_of_same_depth:
-                successors = [succ for succ in G.successors(iterate_from_node)]
-                if len(successors) != 1:
-                    break
-                succ = successors[0]
-                if succ in seen_nodes:
-                    break
-                if G.nodes[succ]["depth"] != current_depth:
-                    break
-                seen_nodes.add(succ)
-                serialized.append(continuation_for_not_well_ended)
-                serialized.append(G.nodes[succ]["token_type"])
-                iterate_from_node = succ
-
-        if within_simultaneous:
-            serialized.append(simultaneous_end)
-        print("serialized", " ".join(serialized))
-        return " ".join(serialized)
-
+        node_tokens_sequence = serialize_graph_nodes(G)
+        print("node_tokens_sequence", node_tokens_sequence)
+        extracted_remi = node_sequence_to_remi_tokens(node_tokens_sequence)
+        print("extracted_remi", extracted_remi)
 
     # Expand compressed score graph. Note that the REMIGraphBPE compression loses edges that are
     # not essential for recovering the underlying score.
@@ -390,15 +400,15 @@ def create_dag_corpus():
     # G2.add_node(-1, token_type=start_token_type)
     # G2.add_node(0, token_type="Bar_2")
     # G2.add_node(1, token_type="Position_0")
-    # G2.add_node(2, token_type="Pitch_D4")
+    # G2.add_node(2, token_type="Pitch_50")
     # G2.add_node(3, token_type="Duration_Eighth")
     # G2.add_node(4, token_type="Position_6")
-    # G2.add_node(5, token_type="Pitch_G4")
+    # G2.add_node(5, token_type="Pitch_60")
     # G2.add_node(6, token_type="Duration_Eighth")
     # G2.add_node(7, token_type="Position_0")
-    # G2.add_node(8, token_type="Pitch_D4")
+    # G2.add_node(8, token_type="Pitch_50")
     # G2.add_node(9, token_type="Position_0")
-    # G2.add_node(10, token_type="Pitch_D4")
+    # G2.add_node(10, token_type="Pitch_50")
     # G2.add_node(11, token_type=end_token_type)
     # G2.add_edges_from(
     #     [
@@ -457,7 +467,7 @@ for token, details in remi_graph_bpe.vocabulary.items():
 print(f"Nodes prior to REMIGraphBPE: {len(dag_corpus[0].nodes)}")
 print(f"Nodes after REMIGraphBPE: {len(compressed_graphs[0].nodes)}")
 draw_graph(dag_corpus[0], "Transformed DAG (Before REMIGraphBPE)")
-remi_graph_bpe.serialize_graph(compressed_graphs[0])
+remi_graph_bpe.serialize_to_1d_token_sequence(compressed_graphs[0])
 draw_graph(compressed_graphs[0], "Transformed DAG (After REMIGraphBPE)")
 
 # additional_graphs = [load_as_monoidal_remi_score_graph("./hot-cross-buns.mid")]
