@@ -7,6 +7,29 @@ from remi_score_graph import (
     end_token_type,
 )
 from util.maestro_train_dev_test_splits import train_split
+import MidiTok.src.miditok as miditok
+
+import sys
+sys.setrecursionlimit(30000) # for large graphs
+
+basic_remi_tokenizer = miditok.REMI()
+
+
+def remi_token_type_sequence_to_vocab_ids(remi_token_type_sequence, tokenizer=basic_remi_tokenizer):
+    token_id_sequence = []
+    for token_type in remi_token_type_sequence:
+        if token_type in tokenizer.vocab:
+            token_id = tokenizer.vocab[token_type]
+            token_id_sequence.append(token_id)
+        else:
+            print(f"Token '{token_type}' not in tokenizer vocabulary")
+    return token_id_sequence
+
+
+def remi_token_type_sequence_to_midi(remi_token_type_sequence, tokenizer=basic_remi_tokenizer):
+    token_ids = remi_token_type_sequence_to_vocab_ids(remi_token_type_sequence, tokenizer=tokenizer)
+    score = tokenizer.decode([token_ids])
+    score.dump_midi("./output.mid")
 
 
 # Render the graph using matplotlib.
@@ -62,7 +85,7 @@ class REMIGraphBPE:
         self.continue_sequence_token = 7777
         self.continue_sequence_token_type = "->"
         self.simultaneous_start_token = 8888
-        
+
         # Say we have a path of a complete measure followed by another such path.
         # To collate them if they actually begin at the same time step, we wrap them
         # in a simultaneous section.
@@ -74,7 +97,6 @@ class REMIGraphBPE:
         # We just use one Janus token where we would have both an end and a beginning token consecutively.
         self.simultaneous_end_begin_janus_token = 10000
         self.simultaneous_end_begin_janus_token_type = "]["
-        
 
     def log_status_update(self, label, type_a, type_b):
         print(label)
@@ -317,7 +339,7 @@ class REMIGraphBPE:
                 annotate_nodes_with_depths(G, succ, bar, position, pitch)
 
         def serialize_graph_nodes(G, drop_start_end=True):
-            
+
             # Zip and sort the nodes with their depths.
             annotate_nodes_with_depths(G)
             depth_node_tuples = zip([data["depth"] for _, data in G.nodes(data=True)], G.nodes)
@@ -341,7 +363,6 @@ class REMIGraphBPE:
                     result_token_types.append(self.simultaneous_end_token_type)
                     within_simultaneous = False
                 previous_depth = current_depth
-
 
                 # Detect whether we are entering a section of simultaneous nodes.
                 next_depth = sorted_depth_node_tuples[i + 1][0] if i + 1 < len(sorted_depth_node_tuples) else None
@@ -382,18 +403,29 @@ class REMIGraphBPE:
                 result_token_ids.append(self.simultaneous_end_token)
                 result_token_types.append(self.simultaneous_end_token_type)
 
-
             # The START and END tokens are just to assist in manipulating the graph.
             # They are not essential to the 1d token sequence, so we can drop them.
             if drop_start_end:
                 return result_token_ids[1:-1], result_token_types[1:-1]
-            
+
             return result_token_ids, result_token_types
-        
-        special_non_remi_token_types = set([start_token_type, end_token_type, self.continue_sequence_token_type, self.simultaneous_start_token_type, self.simultaneous_end_token_type, self.simultaneous_end_begin_janus_token_type])
+
+        special_non_remi_token_types = set(
+            [
+                start_token_type,
+                end_token_type,
+                self.continue_sequence_token_type,
+                self.simultaneous_start_token_type,
+                self.simultaneous_end_token_type,
+                self.simultaneous_end_begin_janus_token_type,
+            ]
+        )
+
         # is_remi = lambda token: token not in special_non_remi_token_types
         def node_sequence_to_remi_tokens(node_tokens_types_1d_sequence):
-            non_special_tokens = [token for token in node_tokens_types_1d_sequence if token not in special_non_remi_token_types]
+            non_special_tokens = [
+                token for token in node_tokens_types_1d_sequence if token not in special_non_remi_token_types
+            ]
             return [
                 token
                 for remi_tokens in [parse_remi_tokens_from_token_type(token) for token in non_special_tokens]
@@ -405,6 +437,7 @@ class REMIGraphBPE:
         print("node_tokens_types_sequence", node_tokens_types_sequence)
         extracted_remi = node_sequence_to_remi_tokens(node_tokens_types_sequence)
         print("\nextracted_remi", extracted_remi)
+        return node_tokens_ids_sequence, node_tokens_types_sequence, extracted_remi
 
     # Expand compressed score graph. Note that the REMIGraphBPE compression loses edges that are
     # not essential for recovering the underlying score.
@@ -472,7 +505,10 @@ def create_dag_corpus():
 
     # return [G2]
 
-    G = load_as_monoidal_remi_score_graph("./hot-cross-buns.mid")
+    # G = load_as_monoidal_remi_score_graph("./twinkle.mid")
+    # G = load_as_monoidal_remi_score_graph("./hot-cross-buns.mid")
+    G = load_as_monoidal_remi_score_graph("./data/maestro-v3.0.0/2013/ORIG-MIDI_03_7_8_13_Group__MID--AUDIO_18_R2_2013_wav--3.midi")
+    
     return [G]
     # print([G] + [load_as_monoidal_remi_score_graph(midi) for midi in train_split[:1]])
     # return [G] + [load_as_monoidal_remi_score_graph(midi) for midi in train_split[:1]]
@@ -493,9 +529,13 @@ for token, details in remi_graph_bpe.vocabulary.items():
 
 print(f"Nodes prior to REMIGraphBPE: {len(dag_corpus[0].nodes)}")
 print(f"Nodes after REMIGraphBPE: {len(compressed_graphs[0].nodes)}")
-draw_graph(dag_corpus[0], "Transformed DAG (Before REMIGraphBPE)")
-remi_graph_bpe.serialize_to_1d_token_sequence(compressed_graphs[0])
-draw_graph(compressed_graphs[0], "Transformed DAG (After REMIGraphBPE)")
+# draw_graph(dag_corpus[0], "Transformed DAG (Before REMIGraphBPE)")
+node_tokens_ids_sequence, node_tokens_types_sequence, extracted_remi = remi_graph_bpe.serialize_to_1d_token_sequence(
+    compressed_graphs[0]
+)
+print("extracted_remi", extracted_remi)
+remi_token_type_sequence_to_midi(extracted_remi)
+# draw_graph(compressed_graphs[0], "Transformed DAG (After REMIGraphBPE)")
 
 # additional_graphs = [load_as_monoidal_remi_score_graph("./hot-cross-buns.mid")]
 # additional_graphs = [load_as_monoidal_remi_score_graph(midi) for midi in train_split[:2]]
