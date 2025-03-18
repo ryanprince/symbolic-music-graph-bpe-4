@@ -10,8 +10,14 @@ from remi_score_graph import (
     parse_remi_tokens_from_token_type,
     merge_token_types,
 )
-from util.baroque_midi_train_dev_test_splits import train_split
+from util.baroque_midi_train_dev_test_splits import train_split, test_split
 import MidiTok.src.miditok as miditok
+
+train = train_split[:500]
+test = test_split[:100]
+save_every = 25
+learned_vocab_target = 500
+title = "vertical_and_horizontal_topology"
 
 import sys
 from concurrent.futures import ProcessPoolExecutor
@@ -225,12 +231,52 @@ class REMIGraphBPE:
         merged_type = merge_token_types(type_a, type_b)
         self.vocabulary[merged_type] = {"components": (type_a, type_b)}
         return merged_type
+    
+    def log_progress(self):
+        with open(f"{title}.txt", "a") as f:
+            f.write(f"\n\nLearned vocab size is {len(self.vocabulary)} of target {self.target_learned_vocab_size}\n")
+
+            f.write(f"\n\nLearned vocabulary:\n")
+            for token, details in self.vocabulary.items():
+                source_types = f"({details['components'][0]}, {details['components'][1]})"
+                f.write(f"{token} <- {source_types}\n")
+            f.write(f"\n\ntoken ids of test set examples\n")
+
+            train_set_tokens = []
+            train_set_token_types = []
+            for G in self.original_graphs:
+                tokens, node_tokens_types_sequence, extracted_remi = self.serialize_to_1d_token_sequence(G)
+                train_set_tokens.append(tokens)
+                train_set_token_types.append(node_tokens_types_sequence)
+            f.write(f"\n\ntrain set tokenized:\n")
+            for tokens in train_set_tokens:
+                f.write(f"{tokens}\n")
+            for token_types in train_set_token_types:
+                f.write(f"{token_types}\n")
+            test_set_graphs = [load_with_vertical_and_horizontal_topology(midi) for midi in test]
+            test_set_graphs = self.compress_graphs(test_set_graphs)
+            test_set_tokens = []
+            test_set_token_types = []
+            for G in test_set_graphs:
+                tokens, node_tokens_types_sequence, extracted_remi = self.serialize_to_1d_token_sequence(G)
+                test_set_tokens.append(tokens)
+                test_set_token_types.append(node_tokens_types_sequence)
+            f.write(f"\n\ntest set tokenized:\n")
+            for tokens in test_set_tokens:
+                f.write(f"{tokens}\n")
+            for token_types in test_set_token_types:
+                f.write(f"{token_types}\n")
+
+
 
     # Iteratively applies REMIGraphBPE on the score graphs until the vocabulary reaches the target size.
     def learn_and_apply_vocabulary(self, graphs=None):
         graphs = self.original_graphs if graphs is None else graphs
 
         while len(self.vocabulary) < self.target_learned_vocab_size:
+            if len(self.vocabulary) % save_every == 0:
+                self.log_progress()
+
             print(f"Learned vocab size is {len(self.vocabulary)} of target {self.target_learned_vocab_size}")
 
             pair_counts = self.count_type_pairs_of_potentially_mergable_edges(
@@ -382,81 +428,13 @@ class REMIGraphBPE:
 
 # Demo DAG corpus.
 def create_dag_corpus():
-    # G1 = nx.DiGraph()
-    # G1.add_node(-1, token_type=start_token_type)
-    # G1.add_node(0, token_type="Bar_1")
-    # G1.add_node(1, token_type="Position_0")
-    # G1.add_node(2, token_type="Pitch_C4")
-    # G1.add_node(3, token_type="Duration_Quarter")
-    # G1.add_node(4, token_type="Position_12")
-    # G1.add_node(5, token_type="Pitch_E4")
-    # G1.add_node(6, token_type="Duration_Quarter")
-    # G1.add_node(7, token_type=end_token_type)
-    # G1.add_edges_from([(-1, 0), (0, 1), (1, 2), (2, 3), (0, 4), (4, 5), (5, 6), (6, 7)])
-
-    G2 = nx.DiGraph()
-    G2.add_node(-1, token_type=start_token_type)
-    G2.add_node(0, token_type="Bar_2")
-    G2.add_node(1, token_type="Position_0")
-    G2.add_node(2, token_type="Pitch_50")
-    G2.add_node(3, token_type="Duration_Eighth")
-    G2.add_node(4, token_type="Position_6")
-    G2.add_node(5, token_type="Pitch_60")
-    G2.add_node(6, token_type="Duration_Eighth")
-    G2.add_node(7, token_type="Position_0")
-    G2.add_node(8, token_type="Pitch_50")
-    G2.add_node(9, token_type="Position_0")
-    G2.add_node(10, token_type="Pitch_50")
-    G2.add_node(11, token_type=end_token_type)
-    G2.add_edges_from(
-        [
-            (-1, 0),
-            (0, 1),
-            (1, 2),
-            (2, 3),
-            (0, 4),
-            (4, 5),
-            (5, 6),
-            (0, 7),
-            (7, 8),
-            (0, 9),
-            (9, 10),
-            (2, 7),
-            (2, 9),
-            (6, 11),
-            (10, 11),
-        ]
-    )
-
-    # G3 = nx.DiGraph()
-    # G3.add_node(0, token_type="Bar_3")
-    # G3.add_node(1, token_type="Position_0")
-    # G3.add_node(2, token_type="Pitch_C4")
-    # G3.add_node(3, token_type="Duration_Eighth")
-    # G3.add_node(4, token_type="Position_6")
-    # G3.add_node(5, token_type="Pitch_G4")
-    # G3.add_node(6, token_type="Duration_Eighth")
-    # G3.add_edges_from([(0, 1), (1, 2), (2, 3), (0, 4), (4, 5), (5, 6)])
-
-    # return [G1, G2, G3]
-
-
-    # G = load_with_vertical_and_horizontal_topology("./twinkle.mid")
-    # return [G]
-    # G = load_as_monoidal_remi_score_graph("./hot-cross-buns.mid")
-    # G = load_as_monoidal_remi_score_graph("./data/maestro-v3.0.0/2013/ORIG-MIDI_03_7_8_13_Group__MID--AUDIO_18_R2_2013_wav--3.midi")
-
-    graphs = [load_as_monoidal_remi_score_graph(midi) for midi in train_split[10:30]]
-    # G = graphs[0]
-    # draw_graph(G , "title")
-    # print(G)
+    graphs = [load_with_vertical_and_horizontal_topology(midi) for midi in train]
     return graphs
-    # return [G] + [load_as_monoidal_remi_score_graph(midi) for midi in train_split[:1]]
 
 
 # Run REMIGraphBPE on the small corpus.
 dag_corpus = create_dag_corpus()
-remi_graph_bpe = REMIGraphBPE(target_learned_vocab_size=50, graph_corpus=dag_corpus)
+remi_graph_bpe = REMIGraphBPE(target_learned_vocab_size=learned_vocab_target, graph_corpus=dag_corpus)
 
 compressed_graphs = remi_graph_bpe.learn_and_apply_vocabulary()
 
@@ -469,30 +447,15 @@ for token, details in remi_graph_bpe.vocabulary.items():
 
 print(f"Nodes prior to REMIGraphBPE: {len(dag_corpus[0].nodes)}")
 print(f"Nodes after REMIGraphBPE: {len(compressed_graphs[0].nodes)}")
-draw_graph(dag_corpus[0], "Transformed DAG (Before REMIGraphBPE)")
+# draw_graph(dag_corpus[0], "Transformed DAG (Before REMIGraphBPE)")
 
-node_tokens_ids_sequence, node_tokens_types_sequence, extracted_remi = remi_graph_bpe.serialize_to_1d_token_sequence(
-    compressed_graphs[0]
-)
+# node_tokens_ids_sequence, node_tokens_types_sequence, extracted_remi = remi_graph_bpe.serialize_to_1d_token_sequence(
+#     compressed_graphs[0]
+# )
 
 # print("compressed token types sequence", node_tokens_types_sequence)
 
 # print("extracted_remi", extracted_remi)
 # remi_token_type_sequence_to_midi(extracted_remi)
 print("done")
-draw_graph(compressed_graphs[0], "Transformed DAG (After REMIGraphBPE)")
-
-# print(train_split[10:11])
-
-# additional_graphs = [load_as_monoidal_remi_score_graph("./hot-cross-buns.mid")]
-# additional_graphs = [load_as_monoidal_remi_score_graph(midi) for midi in train_split[:2]]
-# for additional in additional_graphs:
-#     print(f"Nodes before REMIGraphBPE: {len(additional.nodes)}")
-# additional_compressed_graphs = remi_graph_bpe.compress_graphs(additional_graphs)
-# for additional in additional_compressed_graphs:
-#     print(f"Nodes after REMIGraphBPE: {len(additional.nodes)}")
-# draw_graph(additional, "Transformed DAG (After REMIGraphBPE)")
-# draw_graph(dag_corpus[1], "Transformed DAG (Before REMIGraphBPE)")
-# draw_graph(compressed_graphs[1], "Transformed DAG (After REMIGraphBPE)")
-# draw_graph(dag_corpus[2], "Transformed DAG (Before REMIGraphBPE)")
-# draw_graph(compressed_graphs[2], "Transformed DAG (After REMIGraphBPE)")
+# draw_graph(compressed_graphs[0], "Transformed DAG (After REMIGraphBPE)")
