@@ -3,14 +3,21 @@ import matplotlib.pyplot as plt
 from collections import Counter
 from remi_score_graph import (
     load_as_monoidal_remi_score_graph,
+    load_with_vertical_and_horizontal_topology,
     start_token_type,
     end_token_type,
+    annotate_nodes_with_depths,
+    parse_remi_tokens_from_token_type,
+    merge_token_types,
 )
-from util.maestro_train_dev_test_splits import train_split
+from util.baroque_midi_train_dev_test_splits import train_split
 import MidiTok.src.miditok as miditok
 
 import sys
-sys.setrecursionlimit(30000) # for large graphs
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing
+
+sys.setrecursionlimit(30000)  # for large graphs
 
 basic_remi_tokenizer = miditok.REMI()
 
@@ -29,7 +36,7 @@ def remi_token_type_sequence_to_vocab_ids(remi_token_type_sequence, tokenizer=ba
 def remi_token_type_sequence_to_midi(remi_token_type_sequence, tokenizer=basic_remi_tokenizer):
     token_ids = remi_token_type_sequence_to_vocab_ids(remi_token_type_sequence, tokenizer=tokenizer)
     score = tokenizer.decode([token_ids])
-    score.dump_midi("./output.mid")
+    score.dump_midi("./output2.mid")
 
 
 # Render the graph using matplotlib.
@@ -41,33 +48,10 @@ def draw_graph(G, title):
         for node, data in G.nodes(data=True)
     }
     nx.draw(
-        G, pos, with_labels=True, labels=labels, node_color="lightblue", edge_color="gray", node_size=800, font_size=8
+        G, pos, with_labels=True, labels=labels, node_color="lightblue", edge_color="gray", node_size=100, font_size=8
     )
     plt.title(title)
     plt.show()
-
-
-# Returns a list of the REMI tokens that are contained within the token type.
-# Merged tokens are sequences of REMI tokens like (token1 token2 token3 ...).
-# The token type can also be a single REMI token without parentheses.
-def parse_remi_tokens_from_token_type(token_type):
-    is_merged_token = token_type[0] == "(" and token_type[-1] == ")"
-    if is_merged_token:
-        parsed_remi_token_types = token_type[1:-1].split(" ")
-        return parsed_remi_token_types
-    return [token_type]  # The token type was just a single REMI token without parentheses.
-
-
-# Given a list of REMI tokens, merges them into a single token type with parentheses.
-def merge_remi_tokens_to_single_token_type(tokens):
-    return f"({' '.join(tokens)})"
-
-
-# Merges two token types into a single token type.
-def merge_token_types(type_a, type_b):
-    a_subtypes = parse_remi_tokens_from_token_type(type_a)
-    b_subtypes = parse_remi_tokens_from_token_type(type_b)
-    return merge_remi_tokens_to_single_token_type(a_subtypes + b_subtypes)
 
 
 class REMIGraphBPE:
@@ -286,57 +270,10 @@ class REMIGraphBPE:
         return results
 
     def serialize_to_1d_token_sequence(self, G):
-        # Helper methods to interpret REMI tokens.
-        is_bar = lambda remi_token: "Bar_" in remi_token
-        is_position = lambda remi_token: "Position_" in remi_token
-        parse_position = lambda remi_token: int(remi_token.split("_")[1])
-        is_pitch = lambda remi_token: "Pitch_" in remi_token
-        parse_pitch = lambda remi_token: int(remi_token.split("_")[1])
-        is_duration = lambda remi_token: "Duration_" in remi_token
-        is_start = lambda remi_token: start_token_type == remi_token
-        is_end = lambda remi_token: end_token_type == remi_token
 
-        # If the tokenization has split after a position but before its pitch, we will want to scan ahead
-        # to find its pitch to ensure canonical sort order in the 1D serialization.
-        def lookahead_for_pitch(same_node_subsequent_remi_tokens, next_node_index=None):
-            for token in same_node_subsequent_remi_tokens:
-                if is_pitch(token):
-                    return parse_pitch(token)
-            if next_node_index is None:
-                return 0
-            next_node_remi_tokens = parse_remi_tokens_from_token_type(G.nodes[next_node_index]["token_type"])
-            successors = [succ for succ in G.successors(next_node_index)]
-            return lookahead_for_pitch(next_node_remi_tokens, successors[0] if len(successors) == 1 else None)
-
-        # Recursively annotate each node with its depth, to provide a sort order for canonical 1D serialization.
-        # The tokens are read akin to a sort of modified uniform cost search based on this sort order.
-        def annotate_nodes_with_depths(G, start_node_index=-1, bar=0, position=0, pitch=0):
-            remi_tokens = parse_remi_tokens_from_token_type(G.nodes[start_node_index]["token_type"])
-            current_token_depth = None
-            successors = [succ for succ in G.successors(start_node_index)]
-
-            for i, token in enumerate(remi_tokens):
-                if is_bar(token):
-                    bar += 1
-                    position = 0
-                    pitch = 0
-                elif is_position(token):
-                    position = parse_position(token)
-                    pitch = lookahead_for_pitch(remi_tokens[i + 1 :], successors[0] if len(successors) == 1 else None)
-                elif is_pitch(token):
-                    pitch = parse_pitch(token)
-
-                # The first iteration is based on the first REMI token. A merged token should be
-                # sorted based on the depth of its first constituent REMI token.
-                if current_token_depth is None:
-                    current_token_depth = (bar, position, pitch)
-
-            G.nodes[start_node_index]["depth"] = (
-                current_token_depth if current_token_depth is not None else (bar, position, pitch)
-            )
-
-            for succ in successors:
-                annotate_nodes_with_depths(G, succ, bar, position, pitch)
+        # Confirm that the graph is a DAG.
+        if not nx.is_directed_acyclic_graph(G):
+            raise ValueError("The input graph must be a directed acyclic graph (DAG).")
 
         def serialize_graph_nodes(G, drop_start_end=True):
 
@@ -433,10 +370,10 @@ class REMIGraphBPE:
             ]
 
         node_tokens_ids_sequence, node_tokens_types_sequence = serialize_graph_nodes(G)
-        print("node_tokens_ids_sequence", node_tokens_ids_sequence)
-        print("node_tokens_types_sequence", node_tokens_types_sequence)
+        # print("node_tokens_ids_sequence", node_tokens_ids_sequence)
+        # print("node_tokens_types_sequence", node_tokens_types_sequence)
         extracted_remi = node_sequence_to_remi_tokens(node_tokens_types_sequence)
-        print("\nextracted_remi", extracted_remi)
+        # print("\nextracted_remi", extracted_remi)
         return node_tokens_ids_sequence, node_tokens_types_sequence, extracted_remi
 
     # Expand compressed score graph. Note that the REMIGraphBPE compression loses edges that are
@@ -457,39 +394,39 @@ def create_dag_corpus():
     # G1.add_node(7, token_type=end_token_type)
     # G1.add_edges_from([(-1, 0), (0, 1), (1, 2), (2, 3), (0, 4), (4, 5), (5, 6), (6, 7)])
 
-    # G2 = nx.DiGraph()
-    # G2.add_node(-1, token_type=start_token_type)
-    # G2.add_node(0, token_type="Bar_2")
-    # G2.add_node(1, token_type="Position_0")
-    # G2.add_node(2, token_type="Pitch_50")
-    # G2.add_node(3, token_type="Duration_Eighth")
-    # G2.add_node(4, token_type="Position_6")
-    # G2.add_node(5, token_type="Pitch_60")
-    # G2.add_node(6, token_type="Duration_Eighth")
-    # G2.add_node(7, token_type="Position_0")
-    # G2.add_node(8, token_type="Pitch_50")
-    # G2.add_node(9, token_type="Position_0")
-    # G2.add_node(10, token_type="Pitch_50")
-    # G2.add_node(11, token_type=end_token_type)
-    # G2.add_edges_from(
-    #     [
-    #         (-1, 0),
-    #         (0, 1),
-    #         (1, 2),
-    #         (2, 3),
-    #         (0, 4),
-    #         (4, 5),
-    #         (5, 6),
-    #         (0, 7),
-    #         (7, 8),
-    #         (0, 9),
-    #         (9, 10),
-    #         (2, 7),
-    #         (2, 9),
-    #         (6, 11),
-    #         (10, 11),
-    #     ]
-    # )
+    G2 = nx.DiGraph()
+    G2.add_node(-1, token_type=start_token_type)
+    G2.add_node(0, token_type="Bar_2")
+    G2.add_node(1, token_type="Position_0")
+    G2.add_node(2, token_type="Pitch_50")
+    G2.add_node(3, token_type="Duration_Eighth")
+    G2.add_node(4, token_type="Position_6")
+    G2.add_node(5, token_type="Pitch_60")
+    G2.add_node(6, token_type="Duration_Eighth")
+    G2.add_node(7, token_type="Position_0")
+    G2.add_node(8, token_type="Pitch_50")
+    G2.add_node(9, token_type="Position_0")
+    G2.add_node(10, token_type="Pitch_50")
+    G2.add_node(11, token_type=end_token_type)
+    G2.add_edges_from(
+        [
+            (-1, 0),
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (0, 4),
+            (4, 5),
+            (5, 6),
+            (0, 7),
+            (7, 8),
+            (0, 9),
+            (9, 10),
+            (2, 7),
+            (2, 9),
+            (6, 11),
+            (10, 11),
+        ]
+    )
 
     # G3 = nx.DiGraph()
     # G3.add_node(0, token_type="Bar_3")
@@ -503,20 +440,23 @@ def create_dag_corpus():
 
     # return [G1, G2, G3]
 
-    # return [G2]
 
-    # G = load_as_monoidal_remi_score_graph("./twinkle.mid")
+    # G = load_with_vertical_and_horizontal_topology("./twinkle.mid")
+    # return [G]
     # G = load_as_monoidal_remi_score_graph("./hot-cross-buns.mid")
-    G = load_as_monoidal_remi_score_graph("./data/maestro-v3.0.0/2013/ORIG-MIDI_03_7_8_13_Group__MID--AUDIO_18_R2_2013_wav--3.midi")
-    
-    return [G]
-    # print([G] + [load_as_monoidal_remi_score_graph(midi) for midi in train_split[:1]])
+    # G = load_as_monoidal_remi_score_graph("./data/maestro-v3.0.0/2013/ORIG-MIDI_03_7_8_13_Group__MID--AUDIO_18_R2_2013_wav--3.midi")
+
+    graphs = [load_as_monoidal_remi_score_graph(midi) for midi in train_split[10:30]]
+    # G = graphs[0]
+    # draw_graph(G , "title")
+    # print(G)
+    return graphs
     # return [G] + [load_as_monoidal_remi_score_graph(midi) for midi in train_split[:1]]
 
 
 # Run REMIGraphBPE on the small corpus.
 dag_corpus = create_dag_corpus()
-remi_graph_bpe = REMIGraphBPE(target_learned_vocab_size=20, graph_corpus=dag_corpus)
+remi_graph_bpe = REMIGraphBPE(target_learned_vocab_size=50, graph_corpus=dag_corpus)
 
 compressed_graphs = remi_graph_bpe.learn_and_apply_vocabulary()
 
@@ -529,13 +469,20 @@ for token, details in remi_graph_bpe.vocabulary.items():
 
 print(f"Nodes prior to REMIGraphBPE: {len(dag_corpus[0].nodes)}")
 print(f"Nodes after REMIGraphBPE: {len(compressed_graphs[0].nodes)}")
-# draw_graph(dag_corpus[0], "Transformed DAG (Before REMIGraphBPE)")
+draw_graph(dag_corpus[0], "Transformed DAG (Before REMIGraphBPE)")
+
 node_tokens_ids_sequence, node_tokens_types_sequence, extracted_remi = remi_graph_bpe.serialize_to_1d_token_sequence(
     compressed_graphs[0]
 )
-print("extracted_remi", extracted_remi)
-remi_token_type_sequence_to_midi(extracted_remi)
-# draw_graph(compressed_graphs[0], "Transformed DAG (After REMIGraphBPE)")
+
+# print("compressed token types sequence", node_tokens_types_sequence)
+
+# print("extracted_remi", extracted_remi)
+# remi_token_type_sequence_to_midi(extracted_remi)
+print("done")
+draw_graph(compressed_graphs[0], "Transformed DAG (After REMIGraphBPE)")
+
+# print(train_split[10:11])
 
 # additional_graphs = [load_as_monoidal_remi_score_graph("./hot-cross-buns.mid")]
 # additional_graphs = [load_as_monoidal_remi_score_graph(midi) for midi in train_split[:2]]
