@@ -2,6 +2,8 @@ import os
 from miditok import REMI, TokenizerConfig
 import networkx as nx
 from util.baroque_midi_train_dev_test_splits import train_split
+import sys
+sys.setrecursionlimit(30000)  # for large graphs
 
 basic_remi_tokenizer = REMI()
 
@@ -63,14 +65,19 @@ def lookahead_for_pitch(G, same_node_subsequent_remi_tokens, next_node_index=Non
 # Recursively annotate each node with its depth, to provide a sort order for canonical 1D serialization.
 # The tokens are read akin to a sort of modified uniform cost search based on this sort order.
 def annotate_nodes_with_depths(G, start_node_index=-1, bar=0, position=0, pitch=0, seen=set()):
+    # print("0")
     if start_node_index in seen:
+        # print("1")
         return
+    # print("2")
     seen.add(start_node_index)
 
+    # print("A")
     remi_tokens = parse_remi_tokens_from_token_type(G.nodes[start_node_index]["token_type"])
     current_token_depth = None
     successors = [succ for succ in G.successors(start_node_index)]
 
+    # print("B")
     for i, token in enumerate(remi_tokens):
         if is_bar(token):
             bar += 1
@@ -87,12 +94,16 @@ def annotate_nodes_with_depths(G, start_node_index=-1, bar=0, position=0, pitch=
         if current_token_depth is None:
             current_token_depth = (bar, position, pitch)
 
+    # print("C")
     G.nodes[start_node_index]["depth"] = (
         current_token_depth if current_token_depth is not None else (bar, position, pitch)
     )
 
+    # print("D")
     for succ in successors:
-        annotate_nodes_with_depths(G, succ, bar, position, pitch, seen)
+        # print(succ)
+        if succ not in seen:
+            annotate_nodes_with_depths(G, succ, bar, position, pitch, seen)
 
 # Creates a score graph that is just a linked list from START to END.
 def load_as_monoidal_remi_score_graph(midi_file_path):
@@ -118,11 +129,14 @@ def load_as_monoidal_remi_score_graph(midi_file_path):
     return G
 
 def load_with_vertical_and_horizontal_topology(midi_file_path):
+    print(midi_file_path)
     G = load_as_monoidal_remi_score_graph(midi_file_path)
 
+    # print('a')
     # Annotate each node with its depth, to provide a sort order for canonical 1D serialization.
     annotate_nodes_with_depths(G, start_node_index=-1, bar=0, position=0, pitch=0, seen=set())
 
+    # print('b')
     # Link barlines to the every position token (every note event begins with one) that is simultanesous with the barline.
     bar_nodes = [node for node in G.nodes if is_bar(G.nodes[node]["token_type"])]
     for bar in bar_nodes:
@@ -137,6 +151,7 @@ def load_with_vertical_and_horizontal_topology(midi_file_path):
             if not G.has_edge(bar, successor_position):
                 G.add_edge(bar, successor_position)
 
+    # print('c')
     # Link every duration (the last token of a note event) to the positions of notes that are simultaneous with it but sort after it.
     # These conditions prevent cycles, and the sort order is designed to place bass notes first.
     duration_nodes = [node for node in G.nodes if is_duration(G.nodes[node]["token_type"])]
@@ -153,6 +168,7 @@ def load_with_vertical_and_horizontal_topology(midi_file_path):
             if not G.has_edge(duration, successor_position):
                 G.add_edge(duration, successor_position)
 
+    # print('d')
     # Link each duration node to each pitch that occurs after it without first passing a position or bar.
     # Similar to the case above. Applies when the graph does not repeat positions for each simultaneous note event.
     for duration in duration_nodes:
@@ -168,5 +184,5 @@ def load_with_vertical_and_horizontal_topology(midi_file_path):
             if len(successors) != 1:
                 break
             succ = successors[0]
-
+    # print('e')
     return G
