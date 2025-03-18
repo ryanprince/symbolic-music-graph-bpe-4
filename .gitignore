@@ -6,6 +6,9 @@ notes/
 
 # data
 data/
+bach/
+bach\ copy/
+Baroque_MIDI_music_17th_century/
 
 # python
 __pycache__/
